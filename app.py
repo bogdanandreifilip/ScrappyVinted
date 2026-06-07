@@ -80,6 +80,7 @@ def handle_commands():
         if chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
+        # ---------------- ADD (SAFE) ----------------
         if text.startswith("/add"):
 
             parts = text.split()
@@ -101,7 +102,7 @@ def handle_commands():
                     break
 
             if price is None:
-                send("❌ Add price numeric: /add Seiko watch 200 seiko automatic")
+                send("❌ Price missing: /add Seiko watch 200 seiko automatic")
                 continue
 
             keywords = " ".join(parts[3:price_index] + parts[price_index+1:])
@@ -133,7 +134,7 @@ def handle_commands():
     conn.close()
 
 
-# ---------------- MATCH (FIXED) ----------------
+# ---------------- MATCH (STABLE) ----------------
 def match(category, title, keywords):
 
     title = title.lower()
@@ -145,24 +146,16 @@ def match(category, title, keywords):
         "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
     }
 
-    # soft category boost (nu blocăm)
+    category_hit = True
     if category in rules:
-        category_hits = any(w in title for w in rules[category])
-    else:
-        category_hits = True
+        category_hit = any(w in title for w in rules[category])
 
-    keyword_hits = 0
+    keyword_hit = any(k in title for k in keywords)
 
-    for k in keywords:
-        if k in title:
-            keyword_hits += 1
-
-    # logic final:
-    # trebuie fie keyword match, fie category match puternic
-    return keyword_hits >= 1 or category_hits
+    return keyword_hit or category_hit
 
 
-# ---------------- SCRAPER ----------------
+# ---------------- SCRAPER (FIXED VINTED STABLE) ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -177,18 +170,37 @@ def scrape(page, search, seen):
     )
 
     print(f"\n🔎 {name}")
+    print("URL:", url)
 
     page.goto(url, timeout=60000)
-    page.wait_for_timeout(4000)
 
-    items = page.query_selector_all("a[href*='/items/']")
+    # 🔥 wait for dynamic content
+    page.wait_for_timeout(7000)
+
+    # 🔥 NEW robust selectors (multi fallback)
+    items = page.query_selector_all("article")
+
+    if not items:
+        items = page.query_selector_all("div[data-testid], div.feed-grid__item")
+
+    print("FOUND ITEMS:", len(items))
 
     sent = 0
 
     for item in items:
 
         try:
-            href = item.get_attribute("href")
+            text = item.inner_text().strip()
+
+            if not text:
+                continue
+
+            # try find link
+            link = item.query_selector("a[href]")
+            if not link:
+                continue
+
+            href = link.get_attribute("href")
             if not href:
                 continue
 
@@ -197,7 +209,7 @@ def scrape(page, search, seen):
             if full_url in seen:
                 continue
 
-            title = item.inner_text().strip()
+            title = text.split("\n")[0].strip()
 
             if not match(category, title, keywords):
                 continue
@@ -209,8 +221,8 @@ def scrape(page, search, seen):
             seen.append(full_url)
             sent += 1
 
-        except:
-            continue
+        except Exception as e:
+            print("Item error:", e)
 
     print("SENT:", sent)
 

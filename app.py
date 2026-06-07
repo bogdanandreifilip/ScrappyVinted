@@ -1,17 +1,17 @@
 import os
 import json
+import time
 import requests
+from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-API_URL = "https://www.vinted.ro/api/v2/catalog/items"
 
 SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- FILE HELPERS ----------------
+# ---------------- FILES ----------------
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -36,12 +36,12 @@ def send(text):
             json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
             timeout=10
         )
-        print("📨 SENT:", text)
+        print("📨 SENT")
     except Exception as e:
         print("Telegram error:", e)
 
 
-# ---------------- TELEGRAM COMMANDS ----------------
+# ---------------- COMMANDS ----------------
 def handle_commands():
 
     try:
@@ -61,9 +61,8 @@ def handle_commands():
 
         text = u["message"].get("text", "")
 
-        # ---------------- ADD ----------------
+        # /add name keywords price(optional)
         if text.startswith("/add"):
-
             parts = text.split()
 
             if len(parts) < 3:
@@ -90,14 +89,12 @@ def handle_commands():
             save_json(SEARCH_FILE, searches)
             send(f"✅ Added: {name}")
 
-        # ---------------- LIST ----------------
         if text == "/list":
             msg = "SEARCHES:\n"
             for s in searches:
                 msg += f"- {s['name']} ({s['keywords']})\n"
             send(msg)
 
-        # ---------------- REMOVE ----------------
         if text.startswith("/remove"):
             name = text.replace("/remove ", "")
             searches = [s for s in searches if s["name"] != name]
@@ -105,7 +102,7 @@ def handle_commands():
             send(f"🗑 Removed: {name}")
 
 
-# ---------------- MATCH ----------------
+# ---------------- MATCH (PERMISSIVE) ----------------
 def match(title, keywords):
 
     if not title:
@@ -115,64 +112,39 @@ def match(title, keywords):
     keywords = keywords.lower().split()
 
     score = 0
+
     for k in keywords:
         if k in title:
             score += 2
 
+    # accept anything with at least 1 match
     return score >= 1
 
 
-# ---------------- SAFE API CALL ----------------
-def safe_request(params):
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json"
-    }
-
-    try:
-        r = requests.get(API_URL, params=params, headers=headers, timeout=15)
-    except Exception as e:
-        print("Request failed:", e)
-        return None
-
-    if r.status_code != 200:
-        print("API BLOCKED:", r.status_code)
-        print(r.text[:150])
-        return None
-
-    try:
-        return r.json()
-    except:
-        print("NON-JSON RESPONSE")
-        print(r.text[:150])
-        return None
-
-
 # ---------------- SCRAPER ----------------
-def scrape(search, seen):
+def scrape(page, search, seen):
 
     name = search["name"]
     keywords = search["keywords"]
     price_to = search.get("price_to", 999999)
 
-    params = {
-        "search_text": keywords,
-        "price_to": price_to,
-        "per_page": 50,
-        "page": 1,
-        "order": "newest_first"
-    }
+    query = keywords.replace(" ", "%20")
+
+    url = f"https://www.vinted.ro/catalog?search_text={query}&price_to={price_to}&order=newest_first"
 
     print(f"\n🔎 {name}")
+    print("URL:", url)
 
-    data = safe_request(params)
+    page.goto(url, timeout=60000)
 
-    if not data:
-        print("SKIPPED (no data)")
-        return
+    # 🔥 scroll to load everything
+    for _ in range(5):
+        page.mouse.wheel(0, 3000)
+        page.wait_for_timeout(1500)
 
-    items = data.get("items", [])
+    page.wait_for_timeout(3000)
+
+    items = page.query_selector_all("article")
 
     print("FOUND ITEMS:", len(items))
 
@@ -181,29 +153,40 @@ def scrape(search, seen):
     for item in items:
 
         try:
-            item_id = str(item["id"])
-
-            if item_id in seen:
+            link = item.query_selector("a[href*='/items/']")
+            if not link:
                 continue
 
-            title = item.get("title", "")
-            price = item.get("price", {}).get("amount", "")
-            currency = item.get("price", {}).get("currency_code", "")
-            url = item.get("url", "")
+            href = link.get_attribute("href")
+            if not href:
+                continue
+
+            full_url = "https://www.vinted.ro" + href
+
+            if full_url in seen:
+                continue
+
+            title = ""
+            for sel in ["h3", "p", "div"]:
+                el = item.query_selector(sel)
+                if el:
+                    t = el.inner_text().strip()
+                    if t:
+                        title = t.split("\n")[0]
+                        break
 
             if not match(title, keywords):
                 continue
 
             send(f"""🛒 {name}
-🛍 {title}
-💰 {price} {currency}
-🔗 {url}""")
+🛍 {title[:100]}
+🔗 {full_url}""")
 
-            seen.append(item_id)
+            seen.append(full_url)
             sent += 1
 
         except Exception as e:
-            print("Item error:", e)
+            print("Error:", e)
 
     print("SENT:", sent)
 
@@ -211,7 +194,7 @@ def scrape(search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 HYBRID VINTED BOT SAFE START")
+    print("🚀 VINTED PLAYWRIGHT BOT START")
 
     handle_commands()
 
@@ -219,11 +202,17 @@ def main():
     seen = load_json(SEEN_FILE, [])
 
     if not searches:
-        print("⚠️ No searches")
+        print("⚠️ No searches yet")
         return
 
-    for s in searches:
-        scrape(s, seen)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        for s in searches:
+            scrape(page, s, seen)
+
+        browser.close()
 
     save_json(SEEN_FILE, seen)
 

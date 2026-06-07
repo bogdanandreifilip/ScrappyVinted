@@ -80,7 +80,7 @@ def handle_commands():
         if chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
-        # ---------------- ADD (SAFE) ----------------
+        # ---------------- ADD SAFE ----------------
         if text.startswith("/add"):
 
             parts = text.split()
@@ -155,7 +155,7 @@ def match(category, title, keywords):
     return keyword_hit or category_hit
 
 
-# ---------------- SCRAPER (FIXED VINTED STABLE) ----------------
+# ---------------- SCRAPER (FINAL FIXED VINTED) ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -174,34 +174,30 @@ def scrape(page, search, seen):
 
     page.goto(url, timeout=60000)
 
-    # 🔥 wait for dynamic content
-    page.wait_for_timeout(7000)
+    # IMPORTANT: wait JS render
+    page.wait_for_timeout(9000)
 
-    # 🔥 NEW robust selectors (multi fallback)
-    items = page.query_selector_all("article")
+    # 🔥 ONLY REAL ITEM LINKS
+    items = page.query_selector_all("a[href*='/items/']")
 
+    # fallback dacă Vinted schimbă structura
     if not items:
-        items = page.query_selector_all("div[data-testid], div.feed-grid__item")
+        items = page.query_selector_all("article a[href]")
 
-    print("FOUND ITEMS:", len(items))
+    print("FOUND LINKS:", len(items))
 
     sent = 0
 
     for item in items:
 
         try:
-            text = item.inner_text().strip()
+            href = item.get_attribute("href")
 
-            if not text:
-                continue
-
-            # try find link
-            link = item.query_selector("a[href]")
-            if not link:
-                continue
-
-            href = link.get_attribute("href")
             if not href:
+                continue
+
+            # ensure valid product link
+            if "/items/" not in href:
                 continue
 
             full_url = "https://www.vinted.ro" + href
@@ -209,7 +205,11 @@ def scrape(page, search, seen):
             if full_url in seen:
                 continue
 
-            title = text.split("\n")[0].strip()
+            title = item.inner_text().strip()
+            title = title.split("\n")[0] if title else ""
+
+            if not title:
+                continue
 
             if not match(category, title, keywords):
                 continue
@@ -230,7 +230,7 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 PRO V2.5 FIXED START")
+    print("🚀 PRO V2.5 FINAL STABLE START")
 
     handle_commands()
 

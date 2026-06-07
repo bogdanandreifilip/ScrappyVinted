@@ -37,47 +37,23 @@ def notify(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
 
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text,
-            "disable_web_page_preview": True
-        },
-        timeout=10
-    )
-
-
-# ================= SMART MATCH ==================
-def smart_match(title, query):
-    title = title.lower()
-    query_tokens = query.lower().split()
-
-    score = 0
-
-    # query overlap
-    for q in query_tokens:
-        if q in title:
-            score += 2
-
-    # boost keywords
-    boost = ["seiko", "citizen", "casio", "rolex", "omega", "watch", "ceas", "automatic"]
-    for b in boost:
-        if b in title:
-            score += 1
-
-    # noise filter (haine)
-    noise = ["tricou", "bluza", "geaca", "pantaloni", "pantofi", "haina"]
-    for n in noise:
-        if n in title:
-            score -= 5
-
-    return score >= 2
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "disable_web_page_preview": True
+            },
+            timeout=10
+        )
+    except:
+        pass
 
 
 # ================= TELEGRAM ==================
 def handle_commands():
-    print("### NEW HANDLE_COMMANDS ACTIVE ###")
+    print("### TELEGRAM ACTIVE ###")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     r = requests.get(url, timeout=10)
@@ -102,7 +78,7 @@ def handle_commands():
             parts = text.split()
 
             if len(parts) < 4:
-                notify("❌ Format: /add <name> <query...> <price>")
+                notify("❌ /add <name> <query...> <price>")
                 continue
 
             name = parts[1]
@@ -110,7 +86,7 @@ def handle_commands():
             try:
                 price = int(parts[-1])
             except:
-                notify("❌ Price must be number")
+                notify("❌ price must be number")
                 continue
 
             query = " ".join(parts[2:-1])
@@ -132,7 +108,7 @@ def handle_commands():
             else:
                 msg = "📋 SEARCHES:\n\n"
                 for s in searches:
-                    msg += f"🔹 {s['name']}\n{s['query']} ≤ {s['price_to']}\n\n"
+                    msg += f"{s['name']} | {s['price_to']}\n{s['query']}\n\n"
                 notify(msg)
 
         # ---------- REMOVE ----------
@@ -149,8 +125,24 @@ def handle_commands():
                 new_list.append(s)
 
             save_json(SEARCHES_FILE, new_list)
-
             notify("🗑 Removed" if removed else "⚠️ Not found")
+
+
+# ================= SMART FILTER ==================
+def is_good_watch(title):
+    title = title.lower()
+
+    # must be brand
+    brands = ["seiko", "citizen", "casio", "rolex", "omega"]
+    if not any(b in title for b in brands):
+        return False
+
+    # must NOT be obvious junk
+    noise = ["tricou", "bluza", "geaca", "pantofi", "haina", "set lot"]
+    if any(n in title for n in noise):
+        return False
+
+    return True
 
 
 # ================= SCRAPER ==================
@@ -173,7 +165,7 @@ def scrape(search, seen):
         soup = BeautifulSoup(r.text, "html.parser")
 
         cards = soup.select("div[data-cy='l-card']")
-        print(f"PAGE {page} FOUND:", len(cards))
+        print(f"PAGE {page}:", len(cards))
 
         if not cards:
             break
@@ -196,11 +188,12 @@ def scrape(search, seen):
             title = title_el.get_text(strip=True)
             price = price_el.get_text(strip=True) if price_el else "?"
 
-            if not smart_match(title, search["query"]):
+            # 🔥 IMPORTANT FILTER (FIXED)
+            if not is_good_watch(title):
                 continue
 
             notify(
-                f"🔔 {search['name']}\n"
+                f"⌚ {search['name']}\n"
                 f"{title}\n"
                 f"💰 {price}\n"
                 f"{href}"
@@ -216,7 +209,7 @@ def scrape(search, seen):
 
 # ================= MAIN ==================
 def main():
-    print("🚀 OLX TELEGRAM BOT START")
+    print("🚀 OLX BOT START")
 
     handle_commands()
 

@@ -48,8 +48,7 @@ def scrape(search, sent_ids):
         "per_page": 10,
         "page": 1
     }
-    print(data)
-    print(len(data.get("items", [])))
+  
 
     r = requests.get(API_URL, headers=HEADERS, params=params, timeout=15)
 
@@ -76,6 +75,9 @@ def scrape(search, sent_ids):
             f"💰 {price} {currency}\n"
             f"{url}"
         )
+
+        print(data)
+        print(len(data.get("items", [])))
 
         notify(message)
         sent_ids.append(item_id)

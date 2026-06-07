@@ -4,7 +4,7 @@ import json
 import time
 from bs4 import BeautifulSoup
 
-# ---------- CONFIG ----------
+# ================= CONFIG =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -13,14 +13,18 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 SEARCHES_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
-MAX_PAGES = 3  # auto expand pages
+MAX_PAGES = 3
+# ==========================================
 
 
-# ---------- UTILS ----------
+# ================= UTILS ===================
 def load_json(file, default):
     if os.path.exists(file):
-        with open(file, "r") as f:
-            return json.load(f)
+        try:
+            with open(file, "r") as f:
+                return json.load(f)
+        except:
+            return default
     return default
 
 
@@ -44,21 +48,29 @@ def notify(text):
     )
 
 
-# ---------- TELEGRAM COMMANDS ----------
+# ============ TELEGRAM COMMANDS ============
 def handle_commands():
+    print("### NEW HANDLE_COMMANDS ACTIVE ###")
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    r = requests.get(url, timeout=10).json()
+    r = requests.get(url, timeout=10)
+
+    try:
+        data = r.json()
+    except:
+        return
 
     searches = load_json(SEARCHES_FILE, [])
 
-    for update in r.get("result", []):
+    for update in data.get("result", []):
         msg = update.get("message", {})
         text = msg.get("text", "")
         chat_id = msg.get("chat", {}).get("id")
 
-        if str(chat_id) != TELEGRAM_CHAT_ID:
+        if str(chat_id) != str(TELEGRAM_CHAT_ID):
             continue
 
+        # ---------- /add ----------
         if text.startswith("/add"):
             parts = text.split()
 
@@ -71,7 +83,7 @@ def handle_commands():
             try:
                 price = int(parts[-1])
             except ValueError:
-                notify("❌ Ultimul parametru trebuie să fie preț (număr)")
+                notify("❌ Ultimul parametru trebuie să fie preț numeric")
                 continue
 
             query = " ".join(parts[2:-1])
@@ -86,6 +98,7 @@ def handle_commands():
             save_json(SEARCHES_FILE, searches)
             notify(f"✅ Added: {name}")
 
+        # ---------- /list ----------
         if text.startswith("/list"):
             if not searches:
                 notify("⚠️ No searches")
@@ -96,51 +109,7 @@ def handle_commands():
                 )
                 notify(msg)
 
-        if text.startswith("/remove"):
-            name = text.replace("/remove", "").strip()
-            searches = [s for s in searches if s["name"] != name]
-            save_json(SEARCHES_FILE, searches)
-            notify(f"🗑 Removed: {name}")
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    r = requests.get(url, timeout=10).json()
-
-    searches = load_json(SEARCHES_FILE, [])
-
-    for update in r.get("result", []):
-        msg = update.get("message", {})
-        text = msg.get("text", "")
-        chat_id = msg.get("chat", {}).get("id")
-
-        if str(chat_id) != TELEGRAM_CHAT_ID:
-            continue
-
-        if text.startswith("/add"):
-            parts = text.split(maxsplit=3)
-            if len(parts) != 4:
-                notify("❌ Format: /add <name> <query> <price>")
-                continue
-
-            name = parts[1]
-            query = parts[2]
-            price = int(parts[3])
-
-            searches = [s for s in searches if s["name"] != name]
-            searches.append({
-                "name": name,
-                "query": query,
-                "price_to": price
-            })
-
-            save_json(SEARCHES_FILE, searches)
-            notify(f"✅ Added: {name}")
-
-        if text.startswith("/list"):
-            if not searches:
-                notify("⚠️ No searches")
-            else:
-                msg = "\n".join(f"- {s['name']} ({s['price_to']})" for s in searches)
-                notify(msg)
-
+        # ---------- /remove ----------
         if text.startswith("/remove"):
             name = text.replace("/remove", "").strip()
             searches = [s for s in searches if s["name"] != name]
@@ -148,7 +117,7 @@ def handle_commands():
             notify(f"🗑 Removed: {name}")
 
 
-# ---------- SCRAPER ----------
+# ================= SCRAPER =================
 def scrape(search, seen):
     print(f"🔎 {search['name']}")
     sent = 0
@@ -189,13 +158,13 @@ def scrape(search, seen):
             title = title_el.get_text(strip=True).lower()
             price = price_el.get_text(strip=True)
 
-            # HARD FILTER (anti haine)
-            required = ["ceas", "watch", "seiko", "automatic"]
-            if not any(r in title for r in required):
+            # FILTRU permisiv dar util
+            keywords = search["query"].lower().split()
+            if not any(k in title for k in keywords):
                 continue
 
             message = (
-                f"⌚ {search['name']}\n"
+                f"🔔 {search['name']}\n"
                 f"{title}\n"
                 f"💰 {price}\n"
                 f"{href}"
@@ -210,7 +179,7 @@ def scrape(search, seen):
     print("SENT:", sent)
 
 
-# ---------- MAIN ----------
+# ================= MAIN ====================
 def main():
     print("🚀 OLX TELEGRAM BOT START")
 

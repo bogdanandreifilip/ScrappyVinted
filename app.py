@@ -17,7 +17,7 @@ MAX_PAGES = 3
 # ==========================================
 
 
-# ================= UTILS ===================
+# ================= UTILS ==================
 def load_json(file, default):
     if os.path.exists(file):
         try:
@@ -48,7 +48,34 @@ def notify(text):
     )
 
 
-# ============ TELEGRAM COMMANDS ============
+# ================= SMART MATCH ==================
+def smart_match(title, query):
+    title = title.lower()
+    query_tokens = query.lower().split()
+
+    score = 0
+
+    # query overlap
+    for q in query_tokens:
+        if q in title:
+            score += 2
+
+    # boost keywords
+    boost = ["seiko", "citizen", "casio", "rolex", "omega", "watch", "ceas", "automatic"]
+    for b in boost:
+        if b in title:
+            score += 1
+
+    # noise filter (haine)
+    noise = ["tricou", "bluza", "geaca", "pantaloni", "pantofi", "haina"]
+    for n in noise:
+        if n in title:
+            score -= 5
+
+    return score >= 2
+
+
+# ================= TELEGRAM ==================
 def handle_commands():
     print("### NEW HANDLE_COMMANDS ACTIVE ###")
 
@@ -70,7 +97,7 @@ def handle_commands():
         if str(chat_id) != str(TELEGRAM_CHAT_ID):
             continue
 
-        # ---------- /add ----------
+        # ---------- ADD ----------
         if text.startswith("/add"):
             parts = text.split()
 
@@ -82,8 +109,8 @@ def handle_commands():
 
             try:
                 price = int(parts[-1])
-            except ValueError:
-                notify("❌ Ultimul parametru trebuie să fie preț numeric")
+            except:
+                notify("❌ Price must be number")
                 continue
 
             query = " ".join(parts[2:-1])
@@ -98,31 +125,42 @@ def handle_commands():
             save_json(SEARCHES_FILE, searches)
             notify(f"✅ Added: {name}")
 
-        # ---------- /list ----------
-        if text.startswith("/list"):
+        # ---------- LIST ----------
+        elif text.startswith("/list"):
             if not searches:
                 notify("⚠️ No searches")
             else:
-                msg = "\n".join(
-                    f"- {s['name']}: {s['query']} (≤ {s['price_to']})"
-                    for s in searches
-                )
+                msg = "📋 SEARCHES:\n\n"
+                for s in searches:
+                    msg += f"🔹 {s['name']}\n{s['query']} ≤ {s['price_to']}\n\n"
                 notify(msg)
 
-        # ---------- /remove ----------
-        if text.startswith("/remove"):
-            name = text.replace("/remove", "").strip()
-            searches = [s for s in searches if s["name"] != name]
-            save_json(SEARCHES_FILE, searches)
-            notify(f"🗑 Removed: {name}")
+        # ---------- REMOVE ----------
+        elif text.startswith("/remove"):
+            name = text.replace("/remove", "").strip().lower()
+
+            new_list = []
+            removed = False
+
+            for s in searches:
+                if s["name"].lower() == name:
+                    removed = True
+                    continue
+                new_list.append(s)
+
+            save_json(SEARCHES_FILE, new_list)
+
+            notify("🗑 Removed" if removed else "⚠️ Not found")
 
 
-# ================= SCRAPER =================
+# ================= SCRAPER ==================
 def scrape(search, seen):
     print(f"🔎 {search['name']}")
+
     sent = 0
 
     for page in range(1, MAX_PAGES + 1):
+
         url = (
             "https://www.olx.ro/oferte/q-"
             + search["query"].replace(" ", "-")
@@ -145,7 +183,7 @@ def scrape(search, seen):
             title_el = card.find("h6")
             price_el = card.select_one("p[data-testid='ad-price']")
 
-            if not link or not title_el or not price_el:
+            if not link or not title_el:
                 continue
 
             href = link["href"]
@@ -155,22 +193,19 @@ def scrape(search, seen):
             if href in seen:
                 continue
 
-            title = title_el.get_text(strip=True).lower()
-            price = price_el.get_text(strip=True)
+            title = title_el.get_text(strip=True)
+            price = price_el.get_text(strip=True) if price_el else "?"
 
-            # FILTRU permisiv dar util
-            keywords = search["query"].lower().split()
-            if not any(k in title for k in keywords):
+            if not smart_match(title, search["query"]):
                 continue
 
-            message = (
+            notify(
                 f"🔔 {search['name']}\n"
                 f"{title}\n"
                 f"💰 {price}\n"
                 f"{href}"
             )
 
-            notify(message)
             seen.add(href)
             sent += 1
 
@@ -179,7 +214,7 @@ def scrape(search, seen):
     print("SENT:", sent)
 
 
-# ================= MAIN ====================
+# ================= MAIN ==================
 def main():
     print("🚀 OLX TELEGRAM BOT START")
 
@@ -187,7 +222,7 @@ def main():
 
     searches = load_json(SEARCHES_FILE, [])
     if not searches:
-        print("⚠️ No searches found")
+        print("⚠️ No searches")
         return
 
     seen = set(load_json(SEEN_FILE, []))
@@ -196,6 +231,7 @@ def main():
         scrape(s, seen)
 
     save_json(SEEN_FILE, list(seen))
+
     print("DONE")
 
 

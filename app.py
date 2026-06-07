@@ -1,6 +1,6 @@
 import os
 import json
-import time
+import re
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -11,7 +11,7 @@ SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- FILES ----------------
+# ---------------- FILE HELPERS ----------------
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -61,8 +61,9 @@ def handle_commands():
 
         text = u["message"].get("text", "")
 
-        # /add name keywords price(optional)
+        # ---------------- ADD ----------------
         if text.startswith("/add"):
+
             parts = text.split()
 
             if len(parts) < 3:
@@ -89,12 +90,14 @@ def handle_commands():
             save_json(SEARCH_FILE, searches)
             send(f"✅ Added: {name}")
 
+        # ---------------- LIST ----------------
         if text == "/list":
             msg = "SEARCHES:\n"
             for s in searches:
                 msg += f"- {s['name']} ({s['keywords']})\n"
             send(msg)
 
+        # ---------------- REMOVE ----------------
         if text.startswith("/remove"):
             name = text.replace("/remove ", "")
             searches = [s for s in searches if s["name"] != name]
@@ -102,23 +105,60 @@ def handle_commands():
             send(f"🗑 Removed: {name}")
 
 
-# ---------------- MATCH (PERMISSIVE) ----------------
+# ---------------- AI FILTER ----------------
+def normalize(text):
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9 ]", " ", text)
+    return " ".join(text.split())
+
+
 def match(title, keywords):
 
     if not title:
         return False
 
-    title = title.lower()
-    keywords = keywords.lower().split()
+    title = normalize(title)
+    keywords = normalize(keywords)
+
+    title_tokens = set(title.split())
+    keyword_tokens = keywords.split()
 
     score = 0
 
-    for k in keywords:
-        if k in title:
+    # 🔥 exact token match
+    for k in keyword_tokens:
+        if k in title_tokens:
+            score += 3
+
+    # 🔥 fuzzy match
+    for k in keyword_tokens:
+        for t in title_tokens:
+            if k in t or t in k:
+                score += 1
+
+    # 🔥 brand boost
+    brands = [
+        "seiko", "casio", "rolex", "omega",
+        "jordan", "nike", "adidas", "puma"
+    ]
+
+    for b in brands:
+        if b in title_tokens and b in keyword_tokens:
             score += 2
 
-    # accept anything with at least 1 match
-    return score >= 1
+    # 🔥 noise penalty
+    noise = ["lot", "bundle", "kids", "broken", "parts", "spare"]
+    for n in noise:
+        if n in title_tokens:
+            score -= 2
+
+    # 🔥 adaptive threshold
+    if len(keyword_tokens) <= 2:
+        threshold = 2
+    else:
+        threshold = 3
+
+    return score >= threshold
 
 
 # ---------------- SCRAPER ----------------
@@ -137,7 +177,7 @@ def scrape(page, search, seen):
 
     page.goto(url, timeout=60000)
 
-    # 🔥 scroll to load everything
+    # 🔥 scroll to load more items
     for _ in range(5):
         page.mouse.wheel(0, 3000)
         page.wait_for_timeout(1500)
@@ -194,7 +234,7 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 VINTED PLAYWRIGHT BOT START")
+    print("🚀 VINTED AI PLAYWRIGHT BOT START")
 
     handle_commands()
 
@@ -202,7 +242,7 @@ def main():
     seen = load_json(SEEN_FILE, [])
 
     if not searches:
-        print("⚠️ No searches yet")
+        print("⚠️ No searches")
         return
 
     with sync_playwright() as p:

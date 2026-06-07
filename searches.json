@@ -1,16 +1,1 @@
-[
-  {
-    "name": "Seiko Automatic",
-    "params": {
-      "keywords": ["seiko", "automatic"],
-      "price_to": 200
-    }
-  },
-  {
-    "name": "Jordan 1",
-    "params": {
-      "keywords": ["jordan", "1"],
-      "price_to": 250
-    }
-  }
-]
+[]

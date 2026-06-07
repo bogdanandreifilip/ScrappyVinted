@@ -1,26 +1,46 @@
 import os
 import json
+import sqlite3
 import requests
 from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-SEARCH_FILE = "searches.json"
+DB_FILE = "bot.db"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- JSON ----------------
-def load(file, default):
+# ---------------- DB INIT ----------------
+def db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS searches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        category TEXT,
+        keywords TEXT,
+        price_to INTEGER
+    )
+    """)
+
+    conn.commit()
+    return conn
+
+
+# ---------------- SEEN ----------------
+def load_seen():
     try:
-        with open(file, "r") as f:
+        with open(SEEN_FILE, "r") as f:
             return json.load(f)
     except:
-        return default
+        return []
 
 
-def save(file, data):
-    with open(file, "w") as f:
+def save_seen(data):
+    with open(SEEN_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
 
@@ -29,56 +49,101 @@ def send(text):
     if not TELEGRAM_TOKEN:
         return
 
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text
-            },
-            timeout=10
-        )
-        print("📨 SENT:", text)
-    except Exception as e:
-        print("Telegram error:", e)
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+        timeout=10
+    )
 
 
-# ---------------- SMART CATEGORY FILTER (FIXED) ----------------
-def category_match(category, title):
+# ---------------- COMMANDS ----------------
+def handle_commands():
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    data = requests.get(url).json()
+
+    conn = db()
+    c = conn.cursor()
+
+    for u in data.get("result", []):
+
+        if "message" not in u:
+            continue
+
+        text = u["message"].get("text", "")
+        chat_id = str(u["message"]["chat"]["id"])
+
+        if chat_id != str(TELEGRAM_CHAT_ID):
+            continue
+
+        # ➕ ADD
+        if text.startswith("/add"):
+            parts = text.split()
+
+            if len(parts) < 5:
+                send("Format: /add name category price keyword1 keyword2 ...")
+                continue
+
+            name = parts[1]
+            category = parts[2]
+            price = int(parts[3])
+            keywords = " ".join(parts[4:])
+
+            c.execute(
+                "INSERT INTO searches (name, category, keywords, price_to) VALUES (?, ?, ?, ?)",
+                (name, category, keywords, price)
+            )
+
+            conn.commit()
+            send(f"Added: {name}")
+
+        # 📋 LIST
+        if text == "/list":
+            c.execute("SELECT name, category FROM searches")
+            rows = c.fetchall()
+
+            msg = "SEARCHES:\n"
+            for r in rows:
+                msg += f"- {r[0]} ({r[1]})\n"
+
+            send(msg)
+
+        # ❌ REMOVE
+        if text.startswith("/remove"):
+            name = text.replace("/remove ", "")
+
+            c.execute("DELETE FROM searches WHERE name = ?", (name,))
+            conn.commit()
+
+            send(f"Removed: {name}")
+
+    conn.close()
+
+
+# ---------------- FILTERS ----------------
+def match(category, title, keywords):
 
     title = title.lower()
 
     rules = {
-        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic", "diver"],
-        "sneaker": ["jordan", "nike", "adidas", "sneaker", "air"],
-        "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
+        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic"],
+        "sneaker": ["jordan", "nike", "adidas"],
+        "jewelry": ["ring", "necklace", "bracelet"]
     }
 
-    if category not in rules:
-        return True
+    if category in rules:
+        if not any(w in title for w in rules[category]):
+            return False
 
-    # soft match (NU blocăm agresiv)
-    return any(w in title for w in rules[category])
-
-
-# ---------------- KEYWORD MATCH (FIXED) ----------------
-def keyword_match(keywords, title):
-
-    title = title.lower()
-
-    # trebuie măcar 1 keyword să apară
-    return any(k.lower() in title for k in keywords)
+    return any(k.lower() in title for k in keywords.split())
 
 
-# ---------------- SCRAPER ----------------
+# ---------------- SCRAPE ----------------
 def scrape(page, search, seen):
 
-    params = search["params"]
-    keywords = params["keywords"]
-    price_to = params["price_to"]
-    category = search["category"]
+    name, category, keywords, price_to = search
 
-    query = "%20".join(keywords)
+    query = "%20".join(keywords.split())
 
     url = (
         "https://www.vinted.ro/catalog?"
@@ -87,15 +152,12 @@ def scrape(page, search, seen):
         "&order=newest_first"
     )
 
-    print(f"\n🔎 SEARCH: {search['name']}")
-    print("URL:", url)
+    print(f"\n🔎 {name}")
 
     page.goto(url, timeout=60000)
     page.wait_for_timeout(4000)
 
     items = page.query_selector_all("a[href*='/items/']")
-
-    print("FOUND:", len(items))
 
     sent = 0
 
@@ -113,43 +175,41 @@ def scrape(page, search, seen):
 
             title = item.inner_text().strip()
 
-            # ---------------- DEBUG (IMPORTANT) ----------------
-            print("TITLE:", title[:60])
-
-            # ---------------- FILTERS ----------------
-            if not category_match(category, title):
+            if not match(category, title, keywords):
                 continue
 
-            if not keyword_match(keywords, title):
-                continue
-
-            # ---------------- SEND ----------------
-            msg = f"""🛒 {search['name']}
+            send(f"""🛒 {name}
 🛍 {title[:90]}
-🔗 {full_url}"""
-
-            send(msg)
+🔗 {full_url}""")
 
             seen.append(full_url)
             sent += 1
 
-        except Exception as e:
-            print("Error:", e)
+        except:
+            continue
 
-    print("SENT THIS RUN:", sent)
+    print("SENT:", sent)
 
 
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 PRO V2 START")
+    print("🚀 PRO V2.5 START")
 
-    searches = load(SEARCH_FILE, [])
-    seen = load(SEEN_FILE, [])
+    handle_commands()
+
+    conn = db()
+    c = conn.cursor()
+
+    c.execute("SELECT name, category, keywords, price_to FROM searches")
+    searches = c.fetchall()
+    conn.close()
 
     if not searches:
-        print("⚠️ No searches found. Add via /add in Telegram.")
+        print("⚠️ No searches in DB")
         return
+
+    seen = load_seen()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -160,7 +220,7 @@ def main():
 
         browser.close()
 
-    save(SEEN_FILE, seen)
+    save_seen(seen)
 
     print("DONE")
 

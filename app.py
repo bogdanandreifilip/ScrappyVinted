@@ -30,35 +30,53 @@ def save_json(file, data):
 # ---------- notify ----------
 def notify(text):
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": text
-            }
-        )
-        print("SENDING MESSAGE:", text)
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": text
+                },
+                timeout=10
+            )
+            print("📨 SENT:", text)
+        except Exception as e:
+            print("❌ TELEGRAM ERROR:", e)
 
 
 # ---------- scrape ----------
 def scrape(search, sent_ids):
+
     params = {
         "search_text": search["params"]["search_text"],
         "price_to": search["params"]["price_to"],
-        "per_page": 10,
-        "page": 1
+        "per_page": 20,
+        "page": 1,
+        "order": "newest_first"
     }
-  
 
-    r = requests.get(API_URL, headers=HEADERS, params=params, timeout=15)
+    try:
+        r = requests.get(API_URL, headers=HEADERS, params=params, timeout=15)
+        print("STATUS:", r.status_code)
+        print("URL:", r.url)
+    except Exception as e:
+        print("REQUEST ERROR:", e)
+        return
 
     try:
         data = r.json()
-    except:
-        print("API error / rate limit")
+    except Exception as e:
+        print("JSON ERROR:", e)
         return
 
-    for item in data.get("items", []):
+    items = data.get("items", [])
+
+    print(f"ITEMS FOUND for {search['name']}: {len(items)}")
+
+    if not items:
+        return
+
+    for item in items:
         item_id = str(item["id"])
 
         if item_id in sent_ids:
@@ -76,9 +94,6 @@ def scrape(search, sent_ids):
             f"{url}"
         )
 
-        print(data)
-        print(len(data.get("items", [])))
-
         notify(message)
         sent_ids.append(item_id)
 
@@ -90,11 +105,15 @@ def main():
     searches = load_json("searches.json", [])
     sent_ids = load_json("sent_items.json", [])
 
+    print("SEARCH COUNT:", len(searches))
+    print("SENT IDS:", len(sent_ids))
+
     for search in searches:
-        print(f"Searching: {search['name']}")
+        print(f"\n🔎 Searching: {search['name']}")
         scrape(search, sent_ids)
 
     save_json("sent_items.json", sent_ids)
+
     print("DONE")
 
 

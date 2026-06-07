@@ -1,7 +1,7 @@
 import os
 import json
-import sqlite3
 import requests
+import sqlite3
 from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -11,7 +11,7 @@ DB_FILE = "bot.db"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- DB INIT ----------------
+# ---------------- DB ----------------
 def db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -30,7 +30,7 @@ def db():
     return conn
 
 
-# ---------------- SEEN ----------------
+# ---------------- FILES ----------------
 def load_seen():
     try:
         with open(SEEN_FILE, "r") as f:
@@ -49,14 +49,18 @@ def send(text):
     if not TELEGRAM_TOKEN:
         return
 
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+            timeout=10
+        )
+        print("📨 SENT:", text)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
-# ---------------- COMMANDS ----------------
+# ---------------- COMMANDS (FIXED) ----------------
 def handle_commands():
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -76,18 +80,34 @@ def handle_commands():
         if chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
-        # ➕ ADD
+        # ---------------- ADD (ROBUST FIX) ----------------
         if text.startswith("/add"):
+
             parts = text.split()
 
             if len(parts) < 5:
-                send("Format: /add name category price keyword1 keyword2 ...")
+                send("Format: /add name category price keywords...")
                 continue
 
             name = parts[1]
             category = parts[2]
-            price = int(parts[3])
-            keywords = " ".join(parts[4:])
+
+            # 🔥 FIND PRICE (first number anywhere)
+            price = None
+            price_index = None
+
+            for i in range(3, len(parts)):
+                if parts[i].isdigit():
+                    price = int(parts[i])
+                    price_index = i
+                    break
+
+            if price is None:
+                send("❌ Nu am găsit un preț numeric. Exemplu: /add Seiko watch 200 automatic")
+                continue
+
+            # keywords = everything else
+            keywords = " ".join(parts[3:price_index] + parts[price_index+1:])
 
             c.execute(
                 "INSERT INTO searches (name, category, keywords, price_to) VALUES (?, ?, ?, ?)",
@@ -95,9 +115,9 @@ def handle_commands():
             )
 
             conn.commit()
-            send(f"Added: {name}")
+            send(f"✅ Added: {name}")
 
-        # 📋 LIST
+        # ---------------- LIST ----------------
         if text == "/list":
             c.execute("SELECT name, category FROM searches")
             rows = c.fetchall()
@@ -108,27 +128,27 @@ def handle_commands():
 
             send(msg)
 
-        # ❌ REMOVE
+        # ---------------- REMOVE ----------------
         if text.startswith("/remove"):
             name = text.replace("/remove ", "")
 
             c.execute("DELETE FROM searches WHERE name = ?", (name,))
             conn.commit()
 
-            send(f"Removed: {name}")
+            send(f"🗑 Removed: {name}")
 
     conn.close()
 
 
-# ---------------- FILTERS ----------------
+# ---------------- FILTER ----------------
 def match(category, title, keywords):
 
     title = title.lower()
 
     rules = {
-        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic"],
-        "sneaker": ["jordan", "nike", "adidas"],
-        "jewelry": ["ring", "necklace", "bracelet"]
+        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic", "diver"],
+        "sneaker": ["jordan", "nike", "adidas", "sneaker", "air"],
+        "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
     }
 
     if category in rules:
@@ -138,7 +158,7 @@ def match(category, title, keywords):
     return any(k.lower() in title for k in keywords.split())
 
 
-# ---------------- SCRAPE ----------------
+# ---------------- SCRAPER ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -194,7 +214,7 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 PRO V2.5 START")
+    print("🚀 PRO V2.5 FIXED START")
 
     handle_commands()
 
@@ -206,7 +226,7 @@ def main():
     conn.close()
 
     if not searches:
-        print("⚠️ No searches in DB")
+        print("⚠️ No searches found")
         return
 
     seen = load_seen()

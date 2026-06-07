@@ -8,5 +8,10 @@
     "name": "Citizen",
     "query": "citizen automatic",
     "price_to": 1000
+  },
+  {
+    "name": "Orient",
+    "query": "orient automatic",
+    "price_to": 1000
   }
 ]

@@ -117,7 +117,7 @@ def handle_commands():
     conn.close()
 
 
-# ---------------- MATCH (FINAL FIX REAL) ----------------
+# ---------------- MATCH (PERMISSIVE FINAL) ----------------
 def match(category, title, keywords):
 
     if not title:
@@ -125,8 +125,8 @@ def match(category, title, keywords):
 
     title = title.lower()
 
-    # normalize noise
-    noise = ["men", "women", "unisex", "new", "used", "watch", "item"]
+    # remove noise words
+    noise = ["men", "women", "unisex", "new", "used", "vintage", "authentic"]
     for n in noise:
         title = title.replace(n, "")
 
@@ -136,15 +136,27 @@ def match(category, title, keywords):
 
     score = 0
 
+    # keyword match (strong)
     for k in keywords:
         if k in title:
+            score += 2
+
+    # category boost (soft)
+    category_map = {
+        "watch": ["watch", "seiko", "casio", "rolex", "omega", "automatic"],
+        "sneaker": ["jordan", "nike", "adidas", "air", "sneaker"],
+        "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
+    }
+
+    if category in category_map:
+        if any(w in title for w in category_map[category]):
             score += 1
 
-    # 🔥 relaxed rule: at least 1 hit OR partial brand match
+    # 🔥 permissive threshold (important change)
     return score >= 1
 
 
-# ---------------- SCRAPER (FINAL SAFE VERSION) ----------------
+# ---------------- SCRAPER ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -186,9 +198,7 @@ def scrape(page, search, seen):
             if full_url in seen:
                 continue
 
-            # 🔥 BEST TITLE EXTRACTION (multi fallback)
             title = ""
-
             for sel in ["h3", "p", "div"]:
                 el = item.query_selector(sel)
                 if el:

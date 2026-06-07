@@ -117,7 +117,7 @@ def handle_commands():
     conn.close()
 
 
-# ---------------- MATCH (PERMISSIVE FINAL) ----------------
+# ---------------- MATCH ----------------
 def match(category, title, keywords):
 
     if not title:
@@ -125,7 +125,6 @@ def match(category, title, keywords):
 
     title = title.lower()
 
-    # remove noise words
     noise = ["men", "women", "unisex", "new", "used", "vintage", "authentic"]
     for n in noise:
         title = title.replace(n, "")
@@ -136,12 +135,10 @@ def match(category, title, keywords):
 
     score = 0
 
-    # keyword match (strong)
     for k in keywords:
         if k in title:
             score += 2
 
-    # category boost (soft)
     category_map = {
         "watch": ["watch", "seiko", "casio", "rolex", "omega", "automatic"],
         "sneaker": ["jordan", "nike", "adidas", "air", "sneaker"],
@@ -152,11 +149,10 @@ def match(category, title, keywords):
         if any(w in title for w in category_map[category]):
             score += 1
 
-    # 🔥 permissive threshold (important change)
     return score >= 1
 
 
-# ---------------- SCRAPER ----------------
+# ---------------- SCRAPER (FIXED FULL LOAD) ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -174,7 +170,13 @@ def scrape(page, search, seen):
     print("URL:", url)
 
     page.goto(url, timeout=60000)
-    page.wait_for_timeout(9000)
+
+    # 🔥 IMPORTANT: force lazy-load scrolling
+    for _ in range(5):
+        page.mouse.wheel(0, 3000)
+        page.wait_for_timeout(2000)
+
+    page.wait_for_timeout(3000)
 
     items = page.query_selector_all("article")
 
@@ -190,7 +192,7 @@ def scrape(page, search, seen):
                 continue
 
             href = link.get_attribute("href")
-            if not href or "/items/" not in href:
+            if not href:
                 continue
 
             full_url = "https://www.vinted.ro" + href

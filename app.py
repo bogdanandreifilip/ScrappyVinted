@@ -1,46 +1,27 @@
 import os
 import json
 import requests
-import sqlite3
-from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-DB_FILE = "bot.db"
+API_URL = "https://www.vinted.ro/api/v2/catalog/items"
+
+SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- DB ----------------
-def db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS searches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        category TEXT,
-        keywords TEXT,
-        price_to INTEGER
-    )
-    """)
-
-    conn.commit()
-    return conn
-
-
 # ---------------- FILES ----------------
-def load_seen():
+def load_json(file, default):
     try:
-        with open(SEEN_FILE, "r") as f:
+        with open(file, "r") as f:
             return json.load(f)
     except:
-        return []
+        return default
 
 
-def save_seen(data):
-    with open(SEEN_FILE, "w") as f:
+def save_json(file, data):
+    with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
 
@@ -49,25 +30,24 @@ def send(text):
     if not TELEGRAM_TOKEN:
         return
 
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
-            timeout=10
-        )
-        print("📨 SENT:", text)
-    except Exception as e:
-        print("Telegram error:", e)
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+        timeout=10
+    )
+
+
+def get_updates():
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    return requests.get(url).json()
 
 
 # ---------------- COMMANDS ----------------
 def handle_commands():
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    data = requests.get(url).json()
+    data = get_updates()
 
-    conn = db()
-    c = conn.cursor()
+    searches = load_json(SEARCH_FILE, [])
 
     for u in data.get("result", []):
 
@@ -75,155 +55,116 @@ def handle_commands():
             continue
 
         text = u["message"].get("text", "")
-        chat_id = str(u["message"]["chat"]["id"])
 
-        if chat_id != str(TELEGRAM_CHAT_ID):
-            continue
-
+        # ---------------- ADD ----------------
         if text.startswith("/add"):
-
             parts = text.split()
 
-            if len(parts) < 5:
-                send("Format: /add name category price keywords...")
+            if len(parts) < 3:
+                send("Format: /add name keywords price(optional)")
                 continue
 
             name = parts[1]
-            category = parts[2]
 
-            price = None
-            price_index = None
+            price = 999999
+            keywords = ""
 
-            for i in range(3, len(parts)):
-                if parts[i].isdigit():
-                    price = int(parts[i])
-                    price_index = i
-                    break
+            # detect price if last is number
+            if parts[-1].isdigit():
+                price = int(parts[-1])
+                keywords = " ".join(parts[2:-1])
+            else:
+                keywords = " ".join(parts[2:])
 
-            if price is None:
-                send("❌ Price missing")
-                continue
+            searches.append({
+                "name": name,
+                "keywords": keywords,
+                "price_to": price
+            })
 
-            keywords = " ".join(parts[3:price_index] + parts[price_index+1:])
-
-            c.execute(
-                "INSERT INTO searches (name, category, keywords, price_to) VALUES (?, ?, ?, ?)",
-                (name, category, keywords, price)
-            )
-
-            conn.commit()
+            save_json(SEARCH_FILE, searches)
             send(f"✅ Added: {name}")
 
-    conn.close()
+        # ---------------- LIST ----------------
+        if text == "/list":
+            msg = "SEARCHES:\n"
+            for s in searches:
+                msg += f"- {s['name']} ({s['keywords']})\n"
+            send(msg)
+
+        # ---------------- REMOVE ----------------
+        if text.startswith("/remove"):
+            name = text.replace("/remove ", "")
+            searches = [s for s in searches if s["name"] != name]
+            save_json(SEARCH_FILE, searches)
+            send(f"🗑 Removed: {name}")
 
 
 # ---------------- MATCH ----------------
-def match(category, title, keywords):
+def match(title, keywords):
 
     if not title:
         return False
 
     title = title.lower()
-
-    noise = ["men", "women", "unisex", "new", "used", "vintage", "authentic"]
-    for n in noise:
-        title = title.replace(n, "")
-
-    title = " ".join(title.split())
-
     keywords = keywords.lower().split()
 
     score = 0
-
     for k in keywords:
         if k in title:
             score += 2
 
-    category_map = {
-        "watch": ["watch", "seiko", "casio", "rolex", "omega", "automatic"],
-        "sneaker": ["jordan", "nike", "adidas", "air", "sneaker"],
-        "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
-    }
-
-    if category in category_map:
-        if any(w in title for w in category_map[category]):
-            score += 1
-
     return score >= 1
 
 
-# ---------------- SCRAPER (FIXED FULL LOAD) ----------------
-def scrape(page, search, seen):
+# ---------------- SCRAPER ----------------
+def scrape(search, seen):
 
-    name, category, keywords, price_to = search
+    name = search["name"]
+    keywords = search["keywords"]
+    price_to = search.get("price_to", 999999)
 
-    query = "%20".join(keywords.split())
-
-    url = (
-        "https://www.vinted.ro/catalog?"
-        f"search_text={query}"
-        f"&price_to={price_to}"
-        "&order=newest_first"
-    )
+    params = {
+        "search_text": keywords,
+        "price_to": price_to,
+        "per_page": 50,
+        "page": 1,
+        "order": "newest_first"
+    }
 
     print(f"\n🔎 {name}")
-    print("URL:", url)
 
-    page.goto(url, timeout=60000)
+    r = requests.get(API_URL, params=params, timeout=15)
+    data = r.json()
 
-    # 🔥 IMPORTANT: force lazy-load scrolling
-    for _ in range(5):
-        page.mouse.wheel(0, 3000)
-        page.wait_for_timeout(2000)
+    items = data.get("items", [])
 
-    page.wait_for_timeout(3000)
-
-    items = page.query_selector_all("article")
-
-    print("FOUND ARTICLES:", len(items))
+    print("FOUND:", len(items))
 
     sent = 0
 
     for item in items:
 
-        try:
-            link = item.query_selector("a[href*='/items/']")
-            if not link:
-                continue
+        item_id = str(item["id"])
 
-            href = link.get_attribute("href")
-            if not href:
-                continue
+        if item_id in seen:
+            continue
 
-            full_url = "https://www.vinted.ro" + href
+        title = item.get("title", "")
+        price = item.get("price", {}).get("amount", "")
+        currency = item.get("price", {}).get("currency_code", "")
+        url = item.get("url", "")
 
-            if full_url in seen:
-                continue
+        if not match(title, keywords):
+            continue
 
-            title = ""
-            for sel in ["h3", "p", "div"]:
-                el = item.query_selector(sel)
-                if el:
-                    t = el.inner_text().strip()
-                    if t:
-                        title = t.split("\n")[0]
-                        break
+        send(f"""🛒 {name}
+🛍 {title}
+💰 {price} {currency}
+🔗 {url}""")
 
-            if not title:
-                continue
-
-            if not match(category, title, keywords):
-                continue
-
-            send(f"""🛒 {name}
-🛍 {title[:90]}
-🔗 {full_url}""")
-
-            seen.append(full_url)
-            sent += 1
-
-        except Exception as e:
-            print("Error:", e)
+        seen.append(item_id)
+        sent += 1
 
     print("SENT:", sent)
 
@@ -231,33 +172,17 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 FINAL VINTED BOT START")
+    print("🚀 HYBRID VINTED BOT START")
 
     handle_commands()
 
-    conn = db()
-    c = conn.cursor()
+    searches = load_json(SEARCH_FILE, [])
+    seen = load_json(SEEN_FILE, [])
 
-    c.execute("SELECT name, category, keywords, price_to FROM searches")
-    searches = c.fetchall()
-    conn.close()
+    for s in searches:
+        scrape(s, seen)
 
-    if not searches:
-        print("⚠️ No searches found")
-        return
-
-    seen = load_seen()
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-
-        for s in searches:
-            scrape(page, s, seen)
-
-        browser.close()
-
-    save_seen(seen)
+    save_json(SEEN_FILE, seen)
 
     print("DONE")
 

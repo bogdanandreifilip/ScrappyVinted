@@ -17,7 +17,7 @@ MAX_PAGES = 3
 # ==========================================
 
 
-# ================= UTILS ==================
+# ================= STORAGE ==================
 def load_json(file, default):
     if os.path.exists(file):
         try:
@@ -33,6 +33,7 @@ def save_json(file, data):
         json.dump(data, f, indent=2)
 
 
+# ================= TELEGRAM ==================
 def notify(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -51,7 +52,6 @@ def notify(text):
         pass
 
 
-# ================= TELEGRAM ==================
 def handle_commands():
     print("### TELEGRAM ACTIVE ###")
 
@@ -108,7 +108,7 @@ def handle_commands():
             else:
                 msg = "📋 SEARCHES:\n\n"
                 for s in searches:
-                    msg += f"{s['name']} | {s['price_to']}\n{s['query']}\n\n"
+                    msg += f"{s['name']} | ≤ {s['price_to']}\n{s['query']}\n\n"
                 notify(msg)
 
         # ---------- REMOVE ----------
@@ -125,20 +125,21 @@ def handle_commands():
                 new_list.append(s)
 
             save_json(SEARCHES_FILE, new_list)
+
             notify("🗑 Removed" if removed else "⚠️ Not found")
 
 
-# ================= SMART FILTER ==================
-def is_good_watch(title):
+# ================= FILTER ==================
+def is_good_item(title):
     title = title.lower()
 
-    # must be brand
+    # must be watch brand
     brands = ["seiko", "citizen", "casio", "rolex", "omega"]
     if not any(b in title for b in brands):
         return False
 
-    # must NOT be obvious junk
-    noise = ["tricou", "bluza", "geaca", "pantofi", "haina", "set lot"]
+    # block obvious non-watch items
+    noise = ["tricou", "bluza", "geaca", "pantofi", "haina", "mobila"]
     if any(n in title for n in noise):
         return False
 
@@ -164,32 +165,47 @@ def scrape(search, seen):
         r = requests.get(url, headers=HEADERS, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        cards = soup.select("div[data-cy='l-card']")
-        print(f"PAGE {page}:", len(cards))
+        # 🔥 ROBUST SELECTOR (IMPORTANT FIX)
+        cards = soup.select("div[data-testid='l-card'], div[data-cy='l-card'], article")
+
+        print(f"PAGE {page} FOUND:", len(cards))
 
         if not cards:
             break
 
         for card in cards:
-            link = card.find("a", href=True)
-            title_el = card.find("h6")
-            price_el = card.select_one("p[data-testid='ad-price']")
 
-            if not link or not title_el:
+            # link fallback
+            a = card.find("a", href=True)
+            if not a:
                 continue
 
-            href = link["href"]
+            href = a["href"]
             if not href.startswith("http"):
                 href = "https://www.olx.ro" + href
 
             if href in seen:
                 continue
 
-            title = title_el.get_text(strip=True)
+            # title fallback (VERY IMPORTANT FIX)
+            title = None
+
+            for tag in ["h6", "h5", "h4", "h3"]:
+                t = card.find(tag)
+                if t:
+                    title = t.get_text(strip=True)
+                    break
+
+            if not title:
+                title = card.get_text(" ", strip=True)[:120]
+
+            price_el = card.find("p")
             price = price_el.get_text(strip=True) if price_el else "?"
 
-            # 🔥 IMPORTANT FILTER (FIXED)
-            if not is_good_watch(title):
+            if not title:
+                continue
+
+            if not is_good_item(title):
                 continue
 
             notify(

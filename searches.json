@@ -3,5 +3,10 @@
     "name": "Seiko",
     "query": "ceas seiko automatic",
     "price_to": 200
+  },
+  {
+    "name": "Citizen",
+    "query": "citizen automatic",
+    "price_to": 1000
   }
 ]

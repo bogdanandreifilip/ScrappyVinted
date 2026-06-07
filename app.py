@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import time
+import random
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -11,7 +13,7 @@ SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- FILE HELPERS ----------------
+# ---------------- FILES ----------------
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -61,9 +63,7 @@ def handle_commands():
 
         text = u["message"].get("text", "")
 
-        # ---------------- ADD ----------------
         if text.startswith("/add"):
-
             parts = text.split()
 
             if len(parts) < 3:
@@ -90,14 +90,12 @@ def handle_commands():
             save_json(SEARCH_FILE, searches)
             send(f"✅ Added: {name}")
 
-        # ---------------- LIST ----------------
         if text == "/list":
             msg = "SEARCHES:\n"
             for s in searches:
                 msg += f"- {s['name']} ({s['keywords']})\n"
             send(msg)
 
-        # ---------------- REMOVE ----------------
         if text.startswith("/remove"):
             name = text.replace("/remove ", "")
             searches = [s for s in searches if s["name"] != name]
@@ -125,43 +123,29 @@ def match(title, keywords):
 
     score = 0
 
-    # 🔥 exact token match
     for k in keyword_tokens:
         if k in title_tokens:
             score += 3
 
-    # 🔥 fuzzy match
     for k in keyword_tokens:
         for t in title_tokens:
             if k in t or t in k:
                 score += 1
 
-    # 🔥 brand boost
-    brands = [
-        "seiko", "casio", "rolex", "omega",
-        "jordan", "nike", "adidas", "puma"
-    ]
-
+    brands = ["seiko", "casio", "rolex", "omega", "jordan", "nike", "adidas"]
     for b in brands:
         if b in title_tokens and b in keyword_tokens:
             score += 2
 
-    # 🔥 noise penalty
-    noise = ["lot", "bundle", "kids", "broken", "parts", "spare"]
+    noise = ["lot", "bundle", "kids", "broken", "parts"]
     for n in noise:
         if n in title_tokens:
             score -= 2
 
-    # 🔥 adaptive threshold
-    if len(keyword_tokens) <= 2:
-        threshold = 2
-    else:
-        threshold = 3
-
-    return score >= threshold
+    return score >= 2
 
 
-# ---------------- SCRAPER ----------------
+# ---------------- SCRAPER (FIXED PAGINATION) ----------------
 def scrape(page, search, seen):
 
     name = search["name"]
@@ -170,63 +154,71 @@ def scrape(page, search, seen):
 
     query = keywords.replace(" ", "%20")
 
-    url = f"https://www.vinted.ro/catalog?search_text={query}&price_to={price_to}&order=newest_first"
-
-    print(f"\n🔎 {name}")
-    print("URL:", url)
-
-    page.goto(url, timeout=60000)
-
-    # 🔥 scroll to load more items
-    for _ in range(5):
-        page.mouse.wheel(0, 3000)
-        page.wait_for_timeout(1500)
-
-    page.wait_for_timeout(3000)
-
-    items = page.query_selector_all("article")
-
-    print("FOUND ITEMS:", len(items))
-
     sent = 0
 
-    for item in items:
+    # 🔥 MULTI PAGE SCRAPING (FIX IMPORTANT)
+    for page_num in range(1, 4):
 
-        try:
-            link = item.query_selector("a[href*='/items/']")
-            if not link:
-                continue
+        url = (
+            f"https://www.vinted.ro/catalog?"
+            f"search_text={query}&price_to={price_to}"
+            f"&order=newest_first&page={page_num}"
+            f"&_={int(time.time())}{random.randint(1,999)}"
+        )
 
-            href = link.get_attribute("href")
-            if not href:
-                continue
+        print(f"\n🔎 {name} | page {page_num}")
+        print("URL:", url)
 
-            full_url = "https://www.vinted.ro" + href
+        page.goto(url, timeout=60000)
 
-            if full_url in seen:
-                continue
+        # scroll for lazy load
+        for _ in range(6):
+            page.mouse.wheel(0, 3000)
+            page.wait_for_timeout(random.randint(800, 1500))
 
-            title = ""
-            for sel in ["h3", "p", "div"]:
-                el = item.query_selector(sel)
-                if el:
-                    t = el.inner_text().strip()
-                    if t:
-                        title = t.split("\n")[0]
-                        break
+        page.wait_for_timeout(2000)
 
-            if not match(title, keywords):
-                continue
+        items = page.query_selector_all("article")
 
-            send(f"""🛒 {name}
+        print("FOUND ITEMS:", len(items))
+
+        for item in items:
+
+            try:
+                link = item.query_selector("a[href*='/items/']")
+                if not link:
+                    continue
+
+                href = link.get_attribute("href")
+                if not href:
+                    continue
+
+                full_url = "https://www.vinted.ro" + href
+
+                if full_url in seen:
+                    continue
+
+                title = ""
+                for sel in ["h3", "p", "div"]:
+                    el = item.query_selector(sel)
+                    if el:
+                        t = el.inner_text().strip()
+                        if t:
+                            title = t.split("\n")[0]
+                            break
+
+                if not match(title, keywords):
+                    continue
+
+                send(f"""🛒 {name}
 🛍 {title[:100]}
 🔗 {full_url}""")
 
-            seen.append(full_url)
-            sent += 1
+                seen.append(full_url)
+                sent += 1
 
-        except Exception as e:
-            print("Error:", e)
+            except:
+                continue
 
     print("SENT:", sent)
 
@@ -234,7 +226,7 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 VINTED AI PLAYWRIGHT BOT START")
+    print("🚀 VINTED PLAYWRIGHT PRO FINAL START")
 
     handle_commands()
 

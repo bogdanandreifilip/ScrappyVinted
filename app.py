@@ -37,9 +37,7 @@ def notify(text):
                 "text": text
             }
         )
-
-    if DISCORD_WEBHOOK:
-        requests.post(DISCORD_WEBHOOK, json={"content": text})
+        print("SENDING MESSAGE:", text)
 
 
 # ---------- scrape ----------
@@ -50,6 +48,8 @@ def scrape(search, sent_ids):
         "per_page": 10,
         "page": 1
     }
+    print(data)
+    print(len(data.get("items", [])))
 
     r = requests.get(API_URL, headers=HEADERS, params=params, timeout=15)
 

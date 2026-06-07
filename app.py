@@ -111,4 +111,5 @@ def main():
 
 
 if __name__ == "__main__":
+    notify("TEST MESSAGE FROM BOT")
     main()

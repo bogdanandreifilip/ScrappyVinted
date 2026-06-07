@@ -45,8 +45,8 @@ def notify(text):
 # ---------- scrape ----------
 def scrape(search, sent_ids):
     params = {
-        "search_text": search["search_text"],
-        "price_to": search["price_to"],
+        "search_text": search["params"]["search_text"],
+        "price_to": search["params"]["price_to"],
         "per_page": 10,
         "page": 1
     }

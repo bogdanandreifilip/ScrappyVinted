@@ -117,28 +117,34 @@ def handle_commands():
     conn.close()
 
 
-# ---------------- MATCH ----------------
+# ---------------- MATCH (FINAL FIX REAL) ----------------
 def match(category, title, keywords):
 
+    if not title:
+        return False
+
     title = title.lower()
+
+    # normalize noise
+    noise = ["men", "women", "unisex", "new", "used", "watch", "item"]
+    for n in noise:
+        title = title.replace(n, "")
+
+    title = " ".join(title.split())
+
     keywords = keywords.lower().split()
 
-    rules = {
-        "watch": ["watch", "seiko", "casio", "omega", "rolex", "automatic", "diver"],
-        "sneaker": ["jordan", "nike", "adidas", "sneaker", "air"],
-        "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
-    }
+    score = 0
 
-    category_hit = True
-    if category in rules:
-        category_hit = any(w in title for w in rules[category])
+    for k in keywords:
+        if k in title:
+            score += 1
 
-    keyword_hit = any(k in title for k in keywords)
-
-    return keyword_hit or category_hit
+    # 🔥 relaxed rule: at least 1 hit OR partial brand match
+    return score >= 1
 
 
-# ---------------- SCRAPER (FINAL STABLE FIX) ----------------
+# ---------------- SCRAPER (FINAL SAFE VERSION) ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -156,11 +162,8 @@ def scrape(page, search, seen):
     print("URL:", url)
 
     page.goto(url, timeout=60000)
-
-    # important: wait for JS render
     page.wait_for_timeout(9000)
 
-    # 🔥 stable structure: articles
     items = page.query_selector_all("article")
 
     print("FOUND ARTICLES:", len(items))
@@ -170,7 +173,6 @@ def scrape(page, search, seen):
     for item in items:
 
         try:
-            # link
             link = item.query_selector("a[href*='/items/']")
             if not link:
                 continue
@@ -184,22 +186,19 @@ def scrape(page, search, seen):
             if full_url in seen:
                 continue
 
-            # 🔥 FIX REAL TITLE (multi fallback)
+            # 🔥 BEST TITLE EXTRACTION (multi fallback)
             title = ""
 
-            title_el = item.query_selector("h3")
-            if title_el:
-                title = title_el.inner_text().strip()
-
-            if not title:
-                alt = item.query_selector("p, div")
-                if alt:
-                    title = alt.inner_text().strip()
+            for sel in ["h3", "p", "div"]:
+                el = item.query_selector(sel)
+                if el:
+                    t = el.inner_text().strip()
+                    if t:
+                        title = t.split("\n")[0]
+                        break
 
             if not title:
                 continue
-
-            title = title.split("\n")[0]
 
             if not match(category, title, keywords):
                 continue
@@ -212,7 +211,7 @@ def scrape(page, search, seen):
             sent += 1
 
         except Exception as e:
-            print("Item error:", e)
+            print("Error:", e)
 
     print("SENT:", sent)
 
@@ -220,7 +219,7 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 PRO V2.5 FINAL STABLE START")
+    print("🚀 FINAL VINTED BOT START")
 
     handle_commands()
 

@@ -9,7 +9,6 @@ from playwright.sync_api import sync_playwright
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
@@ -38,69 +37,8 @@ def send(text):
             json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
             timeout=10
         )
-        print("📨 SENT")
-    except Exception as e:
-        print("Telegram error:", e)
-
-
-# ---------------- COMMANDS ----------------
-def handle_commands():
-
-    try:
-        data = requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-            timeout=10
-        ).json()
     except:
-        return
-
-    searches = load_json(SEARCH_FILE, [])
-
-    for u in data.get("result", []):
-
-        if "message" not in u:
-            continue
-
-        text = u["message"].get("text", "")
-
-        if text.startswith("/add"):
-            parts = text.split()
-
-            if len(parts) < 3:
-                send("Format: /add name keywords price(optional)")
-                continue
-
-            name = parts[1]
-
-            price = 999999
-            keywords = ""
-
-            if parts[-1].isdigit():
-                price = int(parts[-1])
-                keywords = " ".join(parts[2:-1])
-            else:
-                keywords = " ".join(parts[2:])
-
-            searches.append({
-                "name": name,
-                "keywords": keywords,
-                "price_to": price
-            })
-
-            save_json(SEARCH_FILE, searches)
-            send(f"✅ Added: {name}")
-
-        if text == "/list":
-            msg = "SEARCHES:\n"
-            for s in searches:
-                msg += f"- {s['name']} ({s['keywords']})\n"
-            send(msg)
-
-        if text.startswith("/remove"):
-            name = text.replace("/remove ", "")
-            searches = [s for s in searches if s["name"] != name]
-            save_json(SEARCH_FILE, searches)
-            send(f"🗑 Removed: {name}")
+        pass
 
 
 # ---------------- AI FILTER ----------------
@@ -145,80 +83,71 @@ def match(title, keywords):
     return score >= 2
 
 
-# ---------------- SCRAPER (FIXED PAGINATION) ----------------
-def scrape(page, search, seen):
+# ---------------- FEED SCRAPER ----------------
+def scrape_feed(page, seen, filters):
 
-    name = search["name"]
-    keywords = search["keywords"]
-    price_to = search.get("price_to", 999999)
+    print("\n🌍 FEED MODE ACTIVE")
 
-    query = keywords.replace(" ", "%20")
+    url = "https://www.vinted.ro/catalog?order=newest_first"
+
+    page.goto(url, timeout=60000)
+
+    # scroll infinite feed
+    last_height = 0
+
+    for _ in range(12):
+        page.mouse.wheel(0, 5000)
+        page.wait_for_timeout(random.randint(800, 1500))
+
+        height = page.evaluate("document.body.scrollHeight")
+
+        if height == last_height:
+            break
+
+        last_height = height
+
+    items = page.query_selector_all("article")
+
+    print("FEED ITEMS:", len(items))
 
     sent = 0
 
-    # 🔥 MULTI PAGE SCRAPING (FIX IMPORTANT)
-    for page_num in range(1, 4):
+    for item in items:
 
-        url = (
-            f"https://www.vinted.ro/catalog?"
-            f"search_text={query}&price_to={price_to}"
-            f"&order=newest_first&page={page_num}"
-            f"&_={int(time.time())}{random.randint(1,999)}"
-        )
+        try:
+            link = item.query_selector("a[href*='/items/']")
+            if not link:
+                continue
 
-        print(f"\n🔎 {name} | page {page_num}")
-        print("URL:", url)
+            href = link.get_attribute("href")
+            if not href:
+                continue
 
-        page.goto(url, timeout=60000)
+            full_url = "https://www.vinted.ro" + href
 
-        # scroll for lazy load
-        for _ in range(6):
-            page.mouse.wheel(0, 3000)
-            page.wait_for_timeout(random.randint(800, 1500))
+            if full_url in seen:
+                continue
 
-        page.wait_for_timeout(2000)
+            text = item.inner_text().lower()
 
-        items = page.query_selector_all("article")
+            # extract title rough
+            title = text.split("\n")[0]
 
-        print("FOUND ITEMS:", len(items))
+            # 🔥 AI FILTER AGAINST MULTIPLE KEYWORDS
+            for f in filters:
 
-        for item in items:
-
-            try:
-                link = item.query_selector("a[href*='/items/']")
-                if not link:
-                    continue
-
-                href = link.get_attribute("href")
-                if not href:
-                    continue
-
-                full_url = "https://www.vinted.ro" + href
-
-                if full_url in seen:
-                    continue
-
-                title = ""
-                for sel in ["h3", "p", "div"]:
-                    el = item.query_selector(sel)
-                    if el:
-                        t = el.inner_text().strip()
-                        if t:
-                            title = t.split("\n")[0]
-                            break
-
-                if not match(title, keywords):
-                    continue
-
-                send(f"""🛒 {name}
+                if match(title, f):
+                    send(f"""🛒 MATCH FOUND
+🧠 {f}
 🛍 {title[:100]}
 🔗 {full_url}""")
 
-                seen.append(full_url)
-                sent += 1
+                    sent += 1
+                    seen.append(full_url)
+                    break
 
-            except:
-                continue
+        except:
+            continue
 
     print("SENT:", sent)
 
@@ -226,23 +155,24 @@ def scrape(page, search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 VINTED PLAYWRIGHT PRO FINAL START")
+    print("🚀 VINTED FEED BOT START")
 
-    handle_commands()
-
-    searches = load_json(SEARCH_FILE, [])
     seen = load_json(SEEN_FILE, [])
 
-    if not searches:
-        print("⚠️ No searches")
-        return
+    # 🔥 MULTIPLE SEARCH INTENTS (AI STYLE)
+    filters = [
+        "seiko watch",
+        "seiko automatic",
+        "casio watch",
+        "rolex watch",
+        "jordan sneakers"
+    ]
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        for s in searches:
-            scrape(page, s, seen)
+        scrape_feed(page, seen, filters)
 
         browser.close()
 

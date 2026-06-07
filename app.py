@@ -1,19 +1,21 @@
-import requests
-import json
 import os
-
-API_URL = "https://www.vinted.ro/api/v2/catalog/items"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json"
-}
+import json
+from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
-# ---------- utils ----------
+def notify(text):
+    import requests
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text}
+        )
+        print("SENT:", text)
+
+
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -27,93 +29,61 @@ def save_json(file, data):
         json.dump(data, f, indent=2)
 
 
-# ---------- notify ----------
-def notify(text):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": text
-                },
-                timeout=10
-            )
-            print("📨 SENT:", text)
-        except Exception as e:
-            print("❌ TELEGRAM ERROR:", e)
+def scrape(page, search, sent_ids):
 
+    query = search["params"]["search_text"]
+    price_to = search["params"]["price_to"]
 
-# ---------- scrape ----------
-def scrape(search, sent_ids):
+    url = f"https://www.vinted.ro/catalog?search_text={query}&price_to={price_to}"
 
-    params = {
-        "search_text": search["params"]["search_text"],
-        "price_to": search["params"]["price_to"],
-        "per_page": 20,
-        "page": 1,
-        "order": "newest_first"
-    }
+    page.goto(url, timeout=60000)
+    page.wait_for_timeout(5000)
 
-    try:
-        r = requests.get(API_URL, headers=HEADERS, params=params, timeout=15)
-        print("STATUS:", r.status_code)
-        print("URL:", r.url)
-    except Exception as e:
-        print("REQUEST ERROR:", e)
-        return
+    items = page.query_selector_all("a[href*='/items/']")
 
-    try:
-        data = r.json()
-    except Exception as e:
-        print("JSON ERROR:", e)
-        return
-
-    items = data.get("items", [])
-
-    print(f"ITEMS FOUND for {search['name']}: {len(items)}")
-
-    if not items:
-        return
+    print(f"FOUND LINKS: {len(items)}")
 
     for item in items:
-        item_id = str(item["id"])
+        try:
+            href = item.get_attribute("href")
+            if not href:
+                continue
 
-        if item_id in sent_ids:
+            full_url = "https://www.vinted.ro" + href
+
+            if full_url in sent_ids:
+                continue
+
+            title = item.inner_text()[:80]
+
+            message = f"""🛒 {search['name']}
+{title}
+{full_url}"""
+
+            notify(message)
+            sent_ids.append(full_url)
+
+        except:
             continue
 
-        title = item.get("title", "No title")
-        price = item["price"]["amount"]
-        currency = item["price"]["currency_code"]
-        url = item.get("url", "")
 
-        message = (
-            f"🛒 {search['name']}\n"
-            f"{title}\n"
-            f"💰 {price} {currency}\n"
-            f"{url}"
-        )
-
-        notify(message)
-        sent_ids.append(item_id)
-
-
-# ---------- main ----------
 def main():
-    print("START SCRAPER")
+    print("START PLAYWRIGHT SCRAPER")
 
     searches = load_json("searches.json", [])
     sent_ids = load_json("sent_items.json", [])
 
-    print("SEARCH COUNT:", len(searches))
-    print("SENT IDS:", len(sent_ids))
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
 
-    for search in searches:
-        print(f"\n🔎 Searching: {search['name']}")
-        scrape(search, sent_ids)
+        for search in searches:
+            print("Searching:", search["name"])
+            scrape(page, search, sent_ids)
+
+        browser.close()
 
     save_json("sent_items.json", sent_ids)
-
     print("DONE")
 
 

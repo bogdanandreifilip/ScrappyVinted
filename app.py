@@ -29,44 +29,48 @@ def send(text):
     if not TELEGRAM_TOKEN:
         return
 
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text
+            },
+            timeout=10
+        )
+        print("📨 SENT:", text)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
-# ---------------- CATEGORY FILTER ----------------
-def category_ok(category, title):
+# ---------------- SMART CATEGORY FILTER (FIXED) ----------------
+def category_match(category, title):
 
     title = title.lower()
 
     rules = {
-        "watch": ["watch", "seiko", "casio", "omega", "rolex", "automatic"],
-        "sneaker": ["jordan", "nike", "adidas", "sneaker"],
+        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic", "diver"],
+        "sneaker": ["jordan", "nike", "adidas", "sneaker", "air"],
         "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
     }
 
     if category not in rules:
         return True
 
-    return any(k in title for k in rules[category])
+    # soft match (NU blocăm agresiv)
+    return any(w in title for w in rules[category])
 
 
-# ---------------- SCORE ----------------
-def score(title, keywords):
+# ---------------- KEYWORD MATCH (FIXED) ----------------
+def keyword_match(keywords, title):
 
     title = title.lower()
-    s = 0
 
-    for k in keywords:
-        if k in title:
-            s += 2
-
-    return s
+    # trebuie măcar 1 keyword să apară
+    return any(k.lower() in title for k in keywords)
 
 
-# ---------------- SCRAPE ----------------
+# ---------------- SCRAPER ----------------
 def scrape(page, search, seen):
 
     params = search["params"]
@@ -83,7 +87,8 @@ def scrape(page, search, seen):
         "&order=newest_first"
     )
 
-    print("\n🔎", search["name"])
+    print(f"\n🔎 SEARCH: {search['name']}")
+    print("URL:", url)
 
     page.goto(url, timeout=60000)
     page.wait_for_timeout(4000)
@@ -91,6 +96,8 @@ def scrape(page, search, seen):
     items = page.query_selector_all("a[href*='/items/']")
 
     print("FOUND:", len(items))
+
+    sent = 0
 
     for item in items:
 
@@ -106,84 +113,30 @@ def scrape(page, search, seen):
 
             title = item.inner_text().strip()
 
-            # FILTER
-            if not category_ok(category, title):
+            # ---------------- DEBUG (IMPORTANT) ----------------
+            print("TITLE:", title[:60])
+
+            # ---------------- FILTERS ----------------
+            if not category_match(category, title):
                 continue
 
-            # SCORE FILTER (simplu)
-            s = score(title, keywords)
-            if s < 1:
+            if not keyword_match(keywords, title):
                 continue
 
+            # ---------------- SEND ----------------
             msg = f"""🛒 {search['name']}
-⭐ Score: {s}
-🛍 {title[:80]}
+🛍 {title[:90]}
 🔗 {full_url}"""
 
             send(msg)
+
             seen.append(full_url)
+            sent += 1
 
-        except:
-            continue
+        except Exception as e:
+            print("Error:", e)
 
-
-# ---------------- TELEGRAM COMMANDS ----------------
-def handle_commands():
-
-    import time
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    r = requests.get(url).json()
-
-    searches = load(SEARCH_FILE, [])
-
-    for update in r.get("result", []):
-
-        if "message" not in update:
-            continue
-
-        text = update["message"].get("text", "")
-        chat_id = str(update["message"]["chat"]["id"])
-
-        if chat_id != str(TELEGRAM_CHAT_ID):
-            continue
-
-        # /add watch seiko automatic 200
-        if text.startswith("/add"):
-            parts = text.split(" ")
-
-            if len(parts) < 4:
-                send("Format: /add name category keywords price")
-                continue
-
-            name = parts[1]
-            category = parts[2]
-            price = int(parts[-1])
-            keywords = parts[3:-1]
-
-            searches.append({
-                "name": name,
-                "category": category,
-                "params": {
-                    "keywords": keywords,
-                    "price_to": price
-                }
-            })
-
-            save(SEARCH_FILE, searches)
-            send(f"Added: {name}")
-
-        if text == "/list":
-            msg = "SEARCHES:\n"
-            for s in searches:
-                msg += f"- {s['name']} ({s['category']})\n"
-            send(msg)
-
-        if text.startswith("/remove"):
-            name = text.replace("/remove ", "")
-            searches = [s for s in searches if s["name"] != name]
-            save(SEARCH_FILE, searches)
-            send(f"Removed: {name}")
+    print("SENT THIS RUN:", sent)
 
 
 # ---------------- MAIN ----------------
@@ -191,10 +144,12 @@ def main():
 
     print("🚀 PRO V2 START")
 
-    handle_commands()
-
     searches = load(SEARCH_FILE, [])
     seen = load(SEEN_FILE, [])
+
+    if not searches:
+        print("⚠️ No searches found. Add via /add in Telegram.")
+        return
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

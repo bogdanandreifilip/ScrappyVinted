@@ -60,7 +60,7 @@ def send(text):
         print("Telegram error:", e)
 
 
-# ---------------- COMMANDS (FIXED) ----------------
+# ---------------- COMMANDS ----------------
 def handle_commands():
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -80,7 +80,6 @@ def handle_commands():
         if chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
-        # ---------------- ADD (ROBUST FIX) ----------------
         if text.startswith("/add"):
 
             parts = text.split()
@@ -92,7 +91,6 @@ def handle_commands():
             name = parts[1]
             category = parts[2]
 
-            # 🔥 FIND PRICE (first number anywhere)
             price = None
             price_index = None
 
@@ -103,10 +101,9 @@ def handle_commands():
                     break
 
             if price is None:
-                send("❌ Nu am găsit un preț numeric. Exemplu: /add Seiko watch 200 automatic")
+                send("❌ Add price numeric: /add Seiko watch 200 seiko automatic")
                 continue
 
-            # keywords = everything else
             keywords = " ".join(parts[3:price_index] + parts[price_index+1:])
 
             c.execute(
@@ -117,7 +114,6 @@ def handle_commands():
             conn.commit()
             send(f"✅ Added: {name}")
 
-        # ---------------- LIST ----------------
         if text == "/list":
             c.execute("SELECT name, category FROM searches")
             rows = c.fetchall()
@@ -128,34 +124,42 @@ def handle_commands():
 
             send(msg)
 
-        # ---------------- REMOVE ----------------
         if text.startswith("/remove"):
             name = text.replace("/remove ", "")
-
             c.execute("DELETE FROM searches WHERE name = ?", (name,))
             conn.commit()
-
             send(f"🗑 Removed: {name}")
 
     conn.close()
 
 
-# ---------------- FILTER ----------------
+# ---------------- MATCH (FIXED) ----------------
 def match(category, title, keywords):
 
     title = title.lower()
+    keywords = keywords.lower().split()
 
     rules = {
-        "watch": ["seiko", "casio", "omega", "rolex", "watch", "automatic", "diver"],
+        "watch": ["watch", "seiko", "casio", "omega", "rolex", "automatic", "diver"],
         "sneaker": ["jordan", "nike", "adidas", "sneaker", "air"],
         "jewelry": ["ring", "necklace", "bracelet", "gold", "silver"]
     }
 
+    # soft category boost (nu blocăm)
     if category in rules:
-        if not any(w in title for w in rules[category]):
-            return False
+        category_hits = any(w in title for w in rules[category])
+    else:
+        category_hits = True
 
-    return any(k.lower() in title for k in keywords.split())
+    keyword_hits = 0
+
+    for k in keywords:
+        if k in title:
+            keyword_hits += 1
+
+    # logic final:
+    # trebuie fie keyword match, fie category match puternic
+    return keyword_hits >= 1 or category_hits
 
 
 # ---------------- SCRAPER ----------------

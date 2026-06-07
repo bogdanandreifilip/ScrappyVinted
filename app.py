@@ -60,6 +60,61 @@ def handle_commands():
             continue
 
         if text.startswith("/add"):
+            parts = text.split()
+
+            if len(parts) < 4:
+                notify("❌ Format: /add <name> <query...> <price>")
+                continue
+
+            name = parts[1]
+
+            try:
+                price = int(parts[-1])
+            except ValueError:
+                notify("❌ Ultimul parametru trebuie să fie preț (număr)")
+                continue
+
+            query = " ".join(parts[2:-1])
+
+            searches = [s for s in searches if s["name"] != name]
+            searches.append({
+                "name": name,
+                "query": query,
+                "price_to": price
+            })
+
+            save_json(SEARCHES_FILE, searches)
+            notify(f"✅ Added: {name}")
+
+        if text.startswith("/list"):
+            if not searches:
+                notify("⚠️ No searches")
+            else:
+                msg = "\n".join(
+                    f"- {s['name']}: {s['query']} (≤ {s['price_to']})"
+                    for s in searches
+                )
+                notify(msg)
+
+        if text.startswith("/remove"):
+            name = text.replace("/remove", "").strip()
+            searches = [s for s in searches if s["name"] != name]
+            save_json(SEARCHES_FILE, searches)
+            notify(f"🗑 Removed: {name}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    r = requests.get(url, timeout=10).json()
+
+    searches = load_json(SEARCHES_FILE, [])
+
+    for update in r.get("result", []):
+        msg = update.get("message", {})
+        text = msg.get("text", "")
+        chat_id = msg.get("chat", {}).get("id")
+
+        if str(chat_id) != TELEGRAM_CHAT_ID:
+            continue
+
+        if text.startswith("/add"):
             parts = text.split(maxsplit=3)
             if len(parts) != 4:
                 notify("❌ Format: /add <name> <query> <price>")

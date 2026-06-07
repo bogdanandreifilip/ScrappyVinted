@@ -2,15 +2,15 @@
   {
     "name": "Seiko Automatic",
     "params": {
-      "search_text": "seiko automatic",
+      "keywords": ["seiko", "automatic"],
       "price_to": 200
     }
   },
   {
     "name": "Jordan 1",
     "params": {
-      "search_text": "jordan 1",
-      "price_to": 1
+      "keywords": ["jordan", "1"],
+      "price_to": 250
     }
   }
 ]

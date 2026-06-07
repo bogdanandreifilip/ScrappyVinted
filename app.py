@@ -1,21 +1,13 @@
 import os
 import json
+import requests
 from playwright.sync_api import sync_playwright
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
-def notify(text):
-    import requests
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text}
-        )
-        print("SENT:", text)
-
-
+# ---------- utils ----------
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -29,19 +21,45 @@ def save_json(file, data):
         json.dump(data, f, indent=2)
 
 
+# ---------- notify ----------
+def notify(text):
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": text
+                },
+                timeout=10
+            )
+            print("📨 SENT:", text)
+        except Exception as e:
+            print("Telegram error:", e)
+
+
+# ---------- scraping ----------
 def scrape(page, search, sent_ids):
 
-    query = search["params"]["search_text"]
-    price_to = search["params"]["price_to"]
+    params = search["params"]
+    keywords = [k.lower() for k in params["keywords"]]
+    price_to = params["price_to"]
 
-    url = f"https://www.vinted.ro/catalog?search_text={query}&price_to={price_to}"
+    url = (
+        "https://www.vinted.ro/catalog?"
+        f"search_text={'%20'.join(keywords)}"
+        f"&price_to={price_to}"
+        "&order=newest_first"
+    )
+
+    print("URL:", url)
 
     page.goto(url, timeout=60000)
     page.wait_for_timeout(5000)
 
     items = page.query_selector_all("a[href*='/items/']")
 
-    print(f"FOUND LINKS: {len(items)}")
+    print(f"FOUND ITEMS: {len(items)}")
 
     for item in items:
         try:
@@ -54,10 +72,14 @@ def scrape(page, search, sent_ids):
             if full_url in sent_ids:
                 continue
 
-            title = item.inner_text()[:80]
+            title = item.inner_text().lower()
+
+            # 🔥 FILTER REAL (anti bijuterii / haine random)
+            if not any(k in title for k in keywords):
+                continue
 
             message = f"""🛒 {search['name']}
-{title}
+{title[:80]}
 {full_url}"""
 
             notify(message)
@@ -67,8 +89,9 @@ def scrape(page, search, sent_ids):
             continue
 
 
+# ---------- main ----------
 def main():
-    print("START PLAYWRIGHT SCRAPER")
+    print("START VINTED BOT")
 
     searches = load_json("searches.json", [])
     sent_ids = load_json("sent_items.json", [])
@@ -78,7 +101,7 @@ def main():
         page = browser.new_page()
 
         for search in searches:
-            print("Searching:", search["name"])
+            print("\nSEARCH:", search["name"])
             scrape(page, search, sent_ids)
 
         browser.close()

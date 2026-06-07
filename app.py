@@ -11,7 +11,7 @@ SEARCH_FILE = "searches.json"
 SEEN_FILE = "seen.json"
 
 
-# ---------------- FILES ----------------
+# ---------------- FILE HELPERS ----------------
 def load_json(file, default):
     try:
         with open(file, "r") as f:
@@ -30,22 +30,27 @@ def send(text):
     if not TELEGRAM_TOKEN:
         return
 
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text},
+            timeout=10
+        )
+        print("📨 SENT:", text)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
-def get_updates():
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    return requests.get(url).json()
-
-
-# ---------------- COMMANDS ----------------
+# ---------------- TELEGRAM COMMANDS ----------------
 def handle_commands():
 
-    data = get_updates()
+    try:
+        data = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            timeout=10
+        ).json()
+    except:
+        return
 
     searches = load_json(SEARCH_FILE, [])
 
@@ -58,6 +63,7 @@ def handle_commands():
 
         # ---------------- ADD ----------------
         if text.startswith("/add"):
+
             parts = text.split()
 
             if len(parts) < 3:
@@ -69,7 +75,6 @@ def handle_commands():
             price = 999999
             keywords = ""
 
-            # detect price if last is number
             if parts[-1].isdigit():
                 price = int(parts[-1])
                 keywords = " ".join(parts[2:-1])
@@ -117,6 +122,33 @@ def match(title, keywords):
     return score >= 1
 
 
+# ---------------- SAFE API CALL ----------------
+def safe_request(params):
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
+
+    try:
+        r = requests.get(API_URL, params=params, headers=headers, timeout=15)
+    except Exception as e:
+        print("Request failed:", e)
+        return None
+
+    if r.status_code != 200:
+        print("API BLOCKED:", r.status_code)
+        print(r.text[:150])
+        return None
+
+    try:
+        return r.json()
+    except:
+        print("NON-JSON RESPONSE")
+        print(r.text[:150])
+        return None
+
+
 # ---------------- SCRAPER ----------------
 def scrape(search, seen):
 
@@ -134,37 +166,44 @@ def scrape(search, seen):
 
     print(f"\n🔎 {name}")
 
-    r = requests.get(API_URL, params=params, timeout=15)
-    data = r.json()
+    data = safe_request(params)
+
+    if not data:
+        print("SKIPPED (no data)")
+        return
 
     items = data.get("items", [])
 
-    print("FOUND:", len(items))
+    print("FOUND ITEMS:", len(items))
 
     sent = 0
 
     for item in items:
 
-        item_id = str(item["id"])
+        try:
+            item_id = str(item["id"])
 
-        if item_id in seen:
-            continue
+            if item_id in seen:
+                continue
 
-        title = item.get("title", "")
-        price = item.get("price", {}).get("amount", "")
-        currency = item.get("price", {}).get("currency_code", "")
-        url = item.get("url", "")
+            title = item.get("title", "")
+            price = item.get("price", {}).get("amount", "")
+            currency = item.get("price", {}).get("currency_code", "")
+            url = item.get("url", "")
 
-        if not match(title, keywords):
-            continue
+            if not match(title, keywords):
+                continue
 
-        send(f"""🛒 {name}
+            send(f"""🛒 {name}
 🛍 {title}
 💰 {price} {currency}
 🔗 {url}""")
 
-        seen.append(item_id)
-        sent += 1
+            seen.append(item_id)
+            sent += 1
+
+        except Exception as e:
+            print("Item error:", e)
 
     print("SENT:", sent)
 
@@ -172,12 +211,16 @@ def scrape(search, seen):
 # ---------------- MAIN ----------------
 def main():
 
-    print("🚀 HYBRID VINTED BOT START")
+    print("🚀 HYBRID VINTED BOT SAFE START")
 
     handle_commands()
 
     searches = load_json(SEARCH_FILE, [])
     seen = load_json(SEEN_FILE, [])
+
+    if not searches:
+        print("⚠️ No searches")
+        return
 
     for s in searches:
         scrape(s, seen)

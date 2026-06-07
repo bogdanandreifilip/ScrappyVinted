@@ -80,7 +80,6 @@ def handle_commands():
         if chat_id != str(TELEGRAM_CHAT_ID):
             continue
 
-        # ---------------- ADD SAFE ----------------
         if text.startswith("/add"):
 
             parts = text.split()
@@ -102,7 +101,7 @@ def handle_commands():
                     break
 
             if price is None:
-                send("❌ Price missing: /add Seiko watch 200 seiko automatic")
+                send("❌ Price missing")
                 continue
 
             keywords = " ".join(parts[3:price_index] + parts[price_index+1:])
@@ -115,26 +114,10 @@ def handle_commands():
             conn.commit()
             send(f"✅ Added: {name}")
 
-        if text == "/list":
-            c.execute("SELECT name, category FROM searches")
-            rows = c.fetchall()
-
-            msg = "SEARCHES:\n"
-            for r in rows:
-                msg += f"- {r[0]} ({r[1]})\n"
-
-            send(msg)
-
-        if text.startswith("/remove"):
-            name = text.replace("/remove ", "")
-            c.execute("DELETE FROM searches WHERE name = ?", (name,))
-            conn.commit()
-            send(f"🗑 Removed: {name}")
-
     conn.close()
 
 
-# ---------------- MATCH (STABLE) ----------------
+# ---------------- MATCH ----------------
 def match(category, title, keywords):
 
     title = title.lower()
@@ -155,7 +138,7 @@ def match(category, title, keywords):
     return keyword_hit or category_hit
 
 
-# ---------------- SCRAPER (FINAL FIXED VINTED) ----------------
+# ---------------- SCRAPER (FINAL STABLE FIX) ----------------
 def scrape(page, search, seen):
 
     name, category, keywords, price_to = search
@@ -174,30 +157,26 @@ def scrape(page, search, seen):
 
     page.goto(url, timeout=60000)
 
-    # IMPORTANT: wait JS render
+    # important: wait for JS render
     page.wait_for_timeout(9000)
 
-    # 🔥 ONLY REAL ITEM LINKS
-    items = page.query_selector_all("a[href*='/items/']")
+    # 🔥 stable structure: articles
+    items = page.query_selector_all("article")
 
-    # fallback dacă Vinted schimbă structura
-    if not items:
-        items = page.query_selector_all("article a[href]")
-
-    print("FOUND LINKS:", len(items))
+    print("FOUND ARTICLES:", len(items))
 
     sent = 0
 
     for item in items:
 
         try:
-            href = item.get_attribute("href")
-
-            if not href:
+            # link
+            link = item.query_selector("a[href*='/items/']")
+            if not link:
                 continue
 
-            # ensure valid product link
-            if "/items/" not in href:
+            href = link.get_attribute("href")
+            if not href or "/items/" not in href:
                 continue
 
             full_url = "https://www.vinted.ro" + href
@@ -205,11 +184,22 @@ def scrape(page, search, seen):
             if full_url in seen:
                 continue
 
-            title = item.inner_text().strip()
-            title = title.split("\n")[0] if title else ""
+            # 🔥 FIX REAL TITLE (multi fallback)
+            title = ""
+
+            title_el = item.query_selector("h3")
+            if title_el:
+                title = title_el.inner_text().strip()
+
+            if not title:
+                alt = item.query_selector("p, div")
+                if alt:
+                    title = alt.inner_text().strip()
 
             if not title:
                 continue
+
+            title = title.split("\n")[0]
 
             if not match(category, title, keywords):
                 continue

@@ -13,5 +13,10 @@
     "name": "Orient",
     "query": "orient automatic",
     "price_to": 1000
+  },
+  {
+    "name": "gshock",
+    "query": "ceas gshock",
+    "price_to": 1000
   }
 ]
